@@ -28,10 +28,10 @@ export function buildView(name) {
   if (mobile) {
     fov = name === 'top' ? 46 : 55;
     if (name === 'white') {
-      position.set(0, 18.8, 13.2);
+      position.set(0, 19.6, 13.8);
       target.set(0, 0.1, 0);
     } else if (name === 'black') {
-      position.set(0, 18.8, -13.2);
+      position.set(0, 19.6, -13.8);
       target.set(0, 0.1, 0);
     } else if (name === 'angle') {
       position.set(11, 17, 13.4);
