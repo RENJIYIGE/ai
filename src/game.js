@@ -281,6 +281,11 @@ export class Game {
   async handleSquare(sq) {
     if (this.busy || this.gameOver) return;
 
+    if (sq === this.selected) {
+      this.deselect();
+      return;
+    }
+
     if (this.selected >= 0) {
       const candidates = this.selectedMoves.filter((m) => m.to === sq);
       if (candidates.length) {
