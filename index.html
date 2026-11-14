@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#080a0f" />
+    <meta name="description" content="一款使用 Three.js 打造的实时三维国际象棋，支持完整规则、人机对战与双人对战。" />
+    <title>3D 国际象棋 · Chess 3D</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="scene" aria-label="三维国际象棋棋盘"></canvas>
+
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-emblem">♞</div>
+          <div class="brand-text">
+            <h1>3D 国际象棋</h1>
+            <span>CHESS · 三维棋局</span>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button class="ghost-btn" id="btn-undo" title="悔棋">悔棋</button>
+          <button class="ghost-btn" id="btn-flip" title="切换视角">翻转视角</button>
+          <button class="ghost-btn accent" id="btn-new" title="开始新对局">新对局</button>
+          <button class="icon-btn" id="btn-sound" title="音效开关" aria-label="音效开关">🔊</button>
+        </div>
+      </header>
+
+      <aside class="panel" id="panel">
+        <div class="status-card" id="status-card">
+          <div class="turn">
+            <span class="turn-dot" id="turn-dot"></span>
+            <div class="turn-text">
+              <strong id="status-title">白方走棋</strong>
+              <span id="status-sub">点击棋子开始对局</span>
+            </div>
+          </div>
+          <div class="thinking" id="thinking" hidden>
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-head"><span>对局设置</span></div>
+          <div class="segmented" id="mode-group">
+            <button data-mode="ai" class="active">人机对战</button>
+            <button data-mode="pvp">双人对战</button>
+          </div>
+          <div class="segmented small" id="level-group">
+            <button data-level="1">简单</button>
+            <button data-level="2" class="active">中等</button>
+            <button data-level="3">困难</button>
+          </div>
+        </div>
+
+        <div class="section grow">
+          <div class="section-head">
+            <span>棋谱</span>
+            <span class="hint" id="move-count">0 步</span>
+          </div>
+          <div class="moves" id="moves">
+            <div class="moves-empty">尚无着法</div>
+          </div>
+        </div>
+
+        <div class="section captured">
+          <div class="captured-row">
+            <span class="cap-label">白方战果</span>
+            <div class="cap-list" id="captured-by-white"></div>
+          </div>
+          <div class="captured-row">
+            <span class="cap-label">黑方战果</span>
+            <div class="cap-list" id="captured-by-black"></div>
+          </div>
+        </div>
+      </aside>
+
+      <button class="panel-toggle" id="panel-toggle" aria-label="展开信息面板">☰</button>
+
+      <div class="hint-bar" id="hint-bar">
+        <span>拖拽旋转</span><i></i><span>滚轮缩放</span><i></i><span>点击棋子走子</span>
+      </div>
+
+      <div class="modal" id="promotion-modal" hidden>
+        <div class="modal-card">
+          <h2>兵升变</h2>
+          <p>选择升变后的棋子</p>
+          <div class="promo-options" id="promo-options"></div>
+        </div>
+      </div>
+
+      <div class="modal" id="gameover-modal" hidden>
+        <div class="modal-card gameover-card">
+          <div class="gameover-icon" id="gameover-icon">♔</div>
+          <h2 id="gameover-title">将死</h2>
+          <p id="gameover-sub">白方获胜</p>
+          <div class="modal-actions">
+            <button class="primary-btn" id="btn-again">再来一局</button>
+            <button class="ghost-btn" id="btn-review">查看棋局</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="loading" id="loading">
+        <div class="loading-mark">♞</div>
+        <span>正在布置棋盘…</span>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
