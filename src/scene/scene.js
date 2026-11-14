@@ -65,7 +65,7 @@ export function createScene(canvas) {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 
   const scene = new THREE.Scene();
-  scene.fog = new THREE.Fog(0x0a0d13, 24, 58);
+  scene.fog = new THREE.Fog(0x0a0d13, 22, 60);
 
   const camera = new THREE.PerspectiveCamera(
     38,
@@ -135,7 +135,7 @@ export function createScene(canvas) {
     metalness: 0.35,
     envMapIntensity: 0.35,
   });
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(48, 72), groundMat);
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(120, 64), groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -0.63;
   ground.receiveShadow = true;
