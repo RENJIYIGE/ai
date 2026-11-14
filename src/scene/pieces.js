@@ -166,7 +166,7 @@ function buildKnight(material) {
   const earGeo = new THREE.ConeGeometry(0.035, 0.11, 14);
   for (const z of [-0.048, 0.048]) {
     const ear = addMesh(g, earGeo, material);
-    ear.position.set(-0.05, 0.735, z);
+    ear.position.set(-0.02, 0.7, z);
     ear.rotation.z = 0.26;
     ear.rotation.x = z > 0 ? -0.16 : 0.16;
   }
