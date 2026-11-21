@@ -79,20 +79,21 @@ export class Sound {
   }
 
   /**
-   * 吃子命中：低频闷响 + 中频碎裂 + 高频脆响 + 碎片落桌的二次撞击。
-   * 分层叠加是打击感的主要来源。
+   * 吃子命中：低频下潜 + 中频碎裂 + 高频脆响 + 碎片落桌的二次撞击。
+   * 分层叠加 + 长尾是打击感的主要来源。
    */
   impact(power = 1) {
-    // 闷响：下潜的低频，给"重量"
-    this.tone({ freq: 86, endFreq: 32, type: 'sine', dur: 0.3, vol: 0.26 * power });
-    this.tone({ freq: 150, endFreq: 70, type: 'triangle', dur: 0.14, vol: 0.12 * power });
-    // 碎裂：中频噪声爆破
-    this.noise({ dur: 0.24, vol: 0.17 * power, freq: 1000 });
-    // 脆响：高频短促，给"硬度"
-    this.noise({ dur: 0.07, vol: 0.2 * power, freq: 3400, type: 'bandpass', q: 0.7 });
+    // 低频冲击：给"重量"，尾巴拉长一点更像爆开
+    this.tone({ freq: 74, endFreq: 26, type: 'sine', dur: 0.4, vol: 0.34 * power });
+    this.tone({ freq: 168, endFreq: 72, type: 'triangle', dur: 0.18, vol: 0.16 * power });
+    // 碎裂主体
+    this.noise({ dur: 0.36, vol: 0.18 * power, freq: 1100 });
+    // 脆响与硬边
+    this.noise({ dur: 0.12, vol: 0.26 * power, freq: 3200, type: 'bandpass', q: 0.7 });
+    this.noise({ dur: 0.045, vol: 0.2 * power, freq: 5400, type: 'bandpass', q: 0.9, delay: 0.012 });
     // 碎片落地
-    this.noise({ dur: 0.05, vol: 0.1 * power, freq: 2400, delay: 0.16, type: 'bandpass', q: 1.2 });
-    this.noise({ dur: 0.08, vol: 0.07 * power, freq: 1300, delay: 0.21 });
+    this.noise({ dur: 0.06, vol: 0.12 * power, freq: 2500, delay: 0.2, type: 'bandpass', q: 1.1 });
+    this.noise({ dur: 0.09, vol: 0.08 * power, freq: 1200, delay: 0.26 });
   }
 
   capture(power = 1) {

@@ -20,11 +20,11 @@ import { createPieceMesh } from './pieces.js';
  */
 
 const DURATION = 760; // 毫秒
-const HOLD = 0.05; // 定格时长（秒）
+const HOLD = 0.02; // 自身的极短定格（外层还有全局顿帧）
 const SETTLE_START = 0.52;
-const GRAVITY = -19;
+const GRAVITY = -23;
 const FLOOR_Y = BOARD_TOP + 0.014;
-const SHARD_COUNT = 18;
+const SHARD_COUNT = 20;
 const HULL_POINT_CAP = 140;
 
 const _m4 = new THREE.Matrix4();
@@ -436,7 +436,7 @@ export function shatterPiece({
   let sparkMat = null;
   let sparkGeo = null;
   let core = null;
-  let ring = null;
+  const rings = [];
   let dust = null;
   let age = 0;
   let shakeFired = false;
@@ -446,8 +446,11 @@ export function shatterPiece({
     disposed = true;
     parent.remove(anchor);
     for (const mat of ownedMat) mat.dispose();
-    for (const sprite of [core, ring]) {
-      if (!sprite) continue;
+    if (core) {
+      core.geometry.dispose();
+      core.material.dispose();
+    }
+    for (const { sprite } of rings) {
       sprite.geometry.dispose();
       sprite.material.dispose();
     }
@@ -492,21 +495,21 @@ export function shatterPiece({
 
       // 定格结束后的爆发速度：离撞击点越远飞得越快
       const out = tpl.out;
-      const speed = ((lowPower ? 1.5 : 1.9) + Math.random() * 1.9) * heightScale;
-      const push = (0.8 + Math.random() * 1.3) * heightScale;
+      const speed = ((lowPower ? 2.1 : 2.7) + Math.random() * 2.9) * heightScale;
+      const push = (1.1 + Math.random() * 2.0) * heightScale;
       shards.push({
         mesh,
         material: mat,
         origin: tpl.centroid.clone(),
         v: new THREE.Vector3(
           out.x * speed + pushDir.x * push,
-          Math.max(1.1, (tpl.centroid.y / 0.9) * 1.6) + Math.random() * 1.6,
+          Math.max(1.6, (tpl.centroid.y / 0.9) * 2.4) + Math.random() * 2.4,
           out.z * speed + pushDir.z * push
         ),
         spin: new THREE.Vector3(
-          (Math.random() - 0.5) * 26,
-          (Math.random() - 0.5) * 26,
-          (Math.random() - 0.5) * 26
+          (Math.random() - 0.5) * 44,
+          (Math.random() - 0.5) * 44,
+          (Math.random() - 0.5) * 44
         ),
         floor: FLOOR_Y + Math.max(0.008, tpl.radius * 0.5),
         bounces: 0,
@@ -530,27 +533,33 @@ export function shatterPiece({
       );
       core.center.set(0.5, 0.4);
       core.position.set(pushDir.x * 0.08, 0.42, pushDir.z * 0.08);
-      core.scale.setScalar(0.3);
+      core.scale.setScalar(0.42);
       anchor.add(core);
     }
 
-    // 冲击波圆环
+    // 双层冲击波：第一圈快而亮，第二圈稍晚更大，形成"轰"的扩散
     const ringTex = getRingTexture();
     if (ringTex) {
-      ring = new THREE.Sprite(
-        new THREE.SpriteMaterial({
-          map: ringTex,
-          color: 0xffe4b8,
-          transparent: true,
-          opacity: 0.6,
-          depthWrite: false,
-          blending: THREE.AdditiveBlending,
-          toneMapped: false,
-        })
-      );
-      ring.position.set(0, 0.4, 0);
-      ring.scale.setScalar(0.35);
-      anchor.add(ring);
+      for (const cfg of [
+        { delay: 0, from: 0.32, to: 1.1, life: 0.2, opacity: 0.95, color: 0xfff0d4 },
+        { delay: 0.055, from: 0.5, to: 1.8, life: 0.28, opacity: 0.55, color: 0xffd9a2 },
+      ]) {
+        const sprite = new THREE.Sprite(
+          new THREE.SpriteMaterial({
+            map: ringTex,
+            color: cfg.color,
+            transparent: true,
+            opacity: cfg.opacity,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+            toneMapped: false,
+          })
+        );
+        sprite.position.set(0, 0.4, 0);
+        sprite.scale.setScalar(cfg.from);
+        anchor.add(sprite);
+        rings.push({ sprite, ...cfg });
+      }
     }
 
     // 贴地尘埃（克制）
@@ -585,7 +594,7 @@ export function shatterPiece({
       blending: THREE.AdditiveBlending,
       toneMapped: false,
     });
-    const sparkCount = lowPower ? 5 : 9;
+    const sparkCount = lowPower ? 7 : 14;
     for (let i = 0; i < sparkCount; i++) {
       const mesh = new THREE.Mesh(sparkGeo, sparkMat);
       mesh.position.set(
@@ -595,12 +604,12 @@ export function shatterPiece({
       );
       anchor.add(mesh);
       const a = Math.random() * Math.PI * 2;
-      const sp = 2.4 + Math.random() * 3.6;
+      const sp = 3.2 + Math.random() * 4.6;
       sparks.push({
         mesh,
         v: new THREE.Vector3(
           Math.cos(a) * sp + pushDir.x * 1.6,
-          1.8 + Math.random() * 3.6,
+          2.4 + Math.random() * 4.4,
           Math.sin(a) * sp + pushDir.z * 1.6
         ),
       });
@@ -663,16 +672,18 @@ export function shatterPiece({
 
     // 核心闪光
     if (core) {
-      const k = Math.min(1, age / 0.1);
-      core.scale.setScalar(0.3 + k * 0.65);
-      core.material.opacity = 0.95 * (1 - k) * (1 - k);
+      const k = Math.min(1, age / 0.12);
+      core.scale.setScalar(0.42 + k * 1.15);
+      core.material.opacity = 1 * (1 - k) * (1 - k);
     }
 
     // 冲击波
-    if (ring) {
-      const k = Math.min(1, age / 0.18);
-      ring.scale.setScalar(0.3 + k * 1.05);
-      ring.material.opacity = 0.6 * Math.pow(1 - k, 1.8);
+    for (const r of rings) {
+      const local = age - r.delay;
+      if (local <= 0) continue;
+      const k = Math.min(1, local / r.life);
+      r.sprite.scale.setScalar(r.from + (r.to - r.from) * k);
+      r.sprite.material.opacity = r.opacity * Math.pow(1 - k, 1.7);
     }
 
     // 尘埃

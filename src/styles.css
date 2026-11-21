@@ -834,12 +834,12 @@ body {
   }
 }
 
-/* 吃子时的全屏撞击闪光：极短、克制，只为强化打击感 */
+/* 吃子时的全屏撞击闪光：极短、猛烈，只为强化打击感 */
 .impact-flash {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background: radial-gradient(circle at 50% 52%, #fff6e2 0%, rgba(255, 232, 196, 0.65) 45%, rgba(255, 210, 150, 0) 72%);
+  background: radial-gradient(circle at 50% 52%, #fff6e2 0%, rgba(255, 236, 202, 0.7) 42%, rgba(255, 206, 146, 0) 74%);
   opacity: 0;
   z-index: 7;
   mix-blend-mode: screen;
@@ -847,20 +847,38 @@ body {
 }
 
 .impact-flash.on {
-  animation: impact-flash 170ms ease-out forwards;
+  animation: impact-flash 210ms ease-out forwards;
 }
 
 @keyframes impact-flash {
   0% {
-    opacity: 0.3;
+    opacity: var(--flash-alpha, 0.42);
   }
   100% {
     opacity: 0;
   }
 }
 
+/* 撞击时的画面轻微推近，配合镜头冲撞 */
+#scene.punch {
+  animation: canvas-punch 260ms cubic-bezier(0.2, 0.9, 0.2, 1);
+}
+
+@keyframes canvas-punch {
+  0% {
+    transform: scale(1);
+  }
+  20% {
+    transform: scale(1.03);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .impact-flash.on {
+  .impact-flash.on,
+  #scene.punch {
     animation: none;
   }
 }
