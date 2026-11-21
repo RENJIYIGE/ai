@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - arena/e937b318-ai
   workflow_dispatch:
 
 permissions:
