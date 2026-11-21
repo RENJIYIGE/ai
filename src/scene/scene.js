@@ -170,6 +170,30 @@ export function createScene(canvas) {
 
   const animator = new Animator();
 
+  /* --------------------------- 镜头震动 --------------------------- */
+  // 只影响渲染用的相机位置，渲染后立刻还原，避免干扰 OrbitControls
+  const shake = { amp: 0, duration: 0, elapsed: 0 };
+  const shakeBase = new THREE.Vector3();
+
+  function shakeCamera(amplitude = 0.16, duration = 240) {
+    if (lowPower) amplitude *= 0.55;
+    shake.amp = Math.max(shake.amp * (1 - shake.elapsed / Math.max(1, shake.duration)), amplitude);
+    shake.duration = duration;
+    shake.elapsed = 0;
+  }
+
+  function applyShake(dt) {
+    if (shake.elapsed >= shake.duration) return false;
+    shake.elapsed += dt;
+    const k = Math.max(0, 1 - shake.elapsed / shake.duration);
+    const a = shake.amp * k * k;
+    const t = shake.elapsed * 0.001;
+    camera.position.x += Math.sin(t * 137) * a;
+    camera.position.y += Math.sin(t * 191 + 1.7) * a * 0.7;
+    camera.position.z += Math.sin(t * 163 + 3.1) * a * 0.5;
+    return true;
+  }
+
   let lastMobile = window.innerWidth / window.innerHeight < 0.92;
 
   function resize() {
@@ -237,7 +261,10 @@ export function createScene(canvas) {
     animator.update(dt);
     controls.update();
     if (onFrame) onFrame(dt / 1000, now / 1000);
+    shakeBase.copy(camera.position);
+    const shaking = applyShake(dt);
     renderer.render(scene, camera);
+    if (shaking) camera.position.copy(shakeBase);
   }
 
   function start(renderCallback) {
@@ -267,6 +294,8 @@ export function createScene(canvas) {
     camera,
     controls,
     animator,
+    lowPower,
+    shakeCamera,
     resize,
     flyTo,
     flyToView,

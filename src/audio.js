@@ -46,14 +46,14 @@ export class Sound {
     osc.stop(t0 + dur + 0.05);
   }
 
-  noise({ dur = 0.12, vol = 0.15, freq = 800, q = 1, delay = 0 }) {
+  noise({ dur = 0.12, vol = 0.15, freq = 800, q = 1, delay = 0, type = 'lowpass' }) {
     if (!this.ensure()) return;
     const ctx = this.ctx;
     const t0 = ctx.currentTime + delay;
     const src = ctx.createBufferSource();
     src.buffer = this.noiseBuffer;
     const filter = ctx.createBiquadFilter();
-    filter.type = 'lowpass';
+    filter.type = type;
     filter.frequency.value = freq;
     filter.Q.value = q;
     const gain = ctx.createGain();
@@ -73,9 +73,30 @@ export class Sound {
     this.noise({ dur: 0.05, vol: 0.05, freq: 1400 });
   }
 
-  capture() {
-    this.noise({ dur: 0.16, vol: 0.16, freq: 900 });
-    this.tone({ freq: 140, endFreq: 55, type: 'sine', dur: 0.22, vol: 0.16 });
+  /** 走子时棋子划过棋盘的气声（吃子前奏） */
+  slide() {
+    this.noise({ dur: 0.13, vol: 0.055, freq: 1900, type: 'bandpass', q: 0.8 });
+  }
+
+  /**
+   * 吃子命中：低频闷响 + 中频碎裂 + 高频脆响 + 碎片落桌的二次撞击。
+   * 分层叠加是打击感的主要来源。
+   */
+  impact(power = 1) {
+    // 闷响：下潜的低频，给"重量"
+    this.tone({ freq: 86, endFreq: 32, type: 'sine', dur: 0.3, vol: 0.26 * power });
+    this.tone({ freq: 150, endFreq: 70, type: 'triangle', dur: 0.14, vol: 0.12 * power });
+    // 碎裂：中频噪声爆破
+    this.noise({ dur: 0.24, vol: 0.17 * power, freq: 1000 });
+    // 脆响：高频短促，给"硬度"
+    this.noise({ dur: 0.07, vol: 0.2 * power, freq: 3400, type: 'bandpass', q: 0.7 });
+    // 碎片落地
+    this.noise({ dur: 0.05, vol: 0.1 * power, freq: 2400, delay: 0.16, type: 'bandpass', q: 1.2 });
+    this.noise({ dur: 0.08, vol: 0.07 * power, freq: 1300, delay: 0.21 });
+  }
+
+  capture(power = 1) {
+    this.impact(power);
   }
 
   castle() {
