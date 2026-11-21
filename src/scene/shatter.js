@@ -6,20 +6,26 @@ import { createPieceMesh } from './pieces.js';
 /**
  * 吃子「粉碎」特效。
  *
- * 命中瞬间，被吃的棋子先被挤压，随即炸成十几块有体积的碎石：
- * 碎片沿各自位置向外飞散，带重力、自转和一次落桌弹跳，
- * 同时叠加命中闪光、贴地尘埃、金色火花与镜头震动。
- * 全过程约 0.56 秒，只影响渲染层，不参与任何棋局逻辑。
+ * 节奏（总时长 760ms）：
+ *   0–50ms    定格：碎片仍保持着棋子轮廓并整体发亮，像被击中后僵住
+ *   50–300ms  炸开：高初速、强自转、重力下拉，短促而猛烈
+ *   300–520ms 落地弹跳、滑停
+ *   520–760ms 碎片缩小淡出，不留残影
  *
- * 碎裂形状（凸包）按「棋子类型 + 颜色」缓存，首次捕捉或开局预热时生成，
- * 之后每次吃子直接复用，命中当帧没有额外计算开销。
+ * 之所以有定格段：直接从「完整的棋子」跳到「一堆碎石」会让眼睛来不及
+ * 反应，看起来像换了个物体；先僵住一瞬再炸开才有被打碎的过程感。
+ *
+ * 碎裂形状（凸包）按「棋子类型 + 颜色」缓存，开局空闲时预热，
+ * 命中当帧几乎没有计算开销。
  */
 
-const DURATION = 560; // 特效总时长（毫秒）
-const GRAVITY = -15;
-const FLOOR_Y = BOARD_TOP + 0.015;
-const SHARD_COUNT = 13;
-const HULL_POINT_CAP = 180;
+const DURATION = 760; // 毫秒
+const HOLD = 0.05; // 定格时长（秒）
+const SETTLE_START = 0.52;
+const GRAVITY = -19;
+const FLOOR_Y = BOARD_TOP + 0.014;
+const SHARD_COUNT = 18;
+const HULL_POINT_CAP = 140;
 
 const _m4 = new THREE.Matrix4();
 const _v = new THREE.Vector3();
@@ -28,10 +34,11 @@ const _v = new THREE.Vector3();
 /* 贴图                                                               */
 /* ------------------------------------------------------------------ */
 
-let flashTexture = null;
+let coreTexture = null;
+let ringTexture = null;
 let dustTexture = null;
 
-function makeRadialTexture(stops, size = 128) {
+function makeTexture(stops, size) {
   if (typeof document === 'undefined') return null;
   const canvas = document.createElement('canvas');
   canvas.width = canvas.height = size;
@@ -46,27 +53,46 @@ function makeRadialTexture(stops, size = 128) {
   return tex;
 }
 
-/** 命中闪光 */
-function getFlashTexture() {
-  if (flashTexture !== null) return flashTexture;
-  flashTexture = makeRadialTexture([
-    [0, 'rgba(255,255,255,1)'],
-    [0.25, 'rgba(255,238,205,0.85)'],
-    [0.6, 'rgba(255,205,140,0.25)'],
-    [1, 'rgba(255,190,120,0)'],
-  ]);
-  return flashTexture;
+/** 撞击核心：小而亮 */
+function getCoreTexture() {
+  if (coreTexture !== null) return coreTexture;
+  coreTexture = makeTexture(
+    [
+      [0, 'rgba(255,255,255,1)'],
+      [0.3, 'rgba(255,240,214,0.75)'],
+      [0.65, 'rgba(255,206,140,0.18)'],
+      [1, 'rgba(255,190,120,0)'],
+    ],
+    128
+  );
+  return coreTexture;
 }
 
-/** 贴地尘埃：柔和的光尘，没有硬边 */
+/** 冲击波圆环 */
+function getRingTexture() {
+  if (ringTexture !== null) return ringTexture;
+  ringTexture = makeTexture(
+    [
+      [0, 'rgba(255,236,200,0)'],
+      [0.52, 'rgba(255,232,190,0.05)'],
+      [0.72, 'rgba(255,240,214,0.75)'],
+      [0.86, 'rgba(255,214,160,0.22)'],
+      [1, 'rgba(255,200,140,0)'],
+    ],
+    256
+  );
+  return ringTexture;
+}
+
+/** 贴地尘埃 */
 function getDustTexture() {
   if (dustTexture !== null) return dustTexture;
-  dustTexture = makeRadialTexture(
+  dustTexture = makeTexture(
     [
       [0, 'rgba(255,236,208,0)'],
-      [0.4, 'rgba(255,236,208,0.06)'],
-      [0.62, 'rgba(255,232,200,0.34)'],
-      [0.8, 'rgba(255,228,196,0.1)'],
+      [0.45, 'rgba(255,236,208,0.05)'],
+      [0.68, 'rgba(255,232,200,0.3)'],
+      [0.85, 'rgba(255,228,196,0.08)'],
       [1, 'rgba(255,228,196,0)'],
     ],
     256
@@ -130,7 +156,7 @@ function collectTriangles(piece) {
   return { tris, sources };
 }
 
-/** 按面积加权撒种子 + 两轮 Lloyd 迭代，得到大小均匀、边缘自然的碎片 */
+/** 按面积加权撒种子 + 两轮 Lloyd 迭代 */
 function clusterTriangles(tris, count) {
   if (!tris.length) return [];
   const totalArea = tris.reduce((sum, t) => sum + t.a, 0);
@@ -198,14 +224,17 @@ function clusterTriangles(tris, count) {
 
 /**
  * 生成碎裂模板：每块碎片是一团表面顶点的凸包，
- * 因此是有体积的「石块」而不是薄片。
+ * 因此是有体积的碎石而不是薄片。
  */
 function buildTemplate(piece) {
   const { tris, sources } = collectTriangles(piece);
   const shards = [];
-  if (!tris.length) return { shards };
+  if (!tris.length) return { shards, height: 0.8 };
 
-  const buckets = clusterTriangles(tris, Math.min(SHARD_COUNT, Math.max(6, tris.length >> 4)));
+  let maxY = 0;
+  for (const t of tris) maxY = Math.max(maxY, t.v[1], t.v[4], t.v[7]);
+
+  const buckets = clusterTriangles(tris, Math.min(SHARD_COUNT, Math.max(8, tris.length >> 4)));
   const seen = new Set();
   const points = [];
 
@@ -233,7 +262,6 @@ function buildTemplate(piece) {
     }
     if (!material) continue;
 
-    // 表面顶点去重后抽样，凸包计算保持在毫秒级
     seen.clear();
     points.length = 0;
     for (const t of bucket) {
@@ -247,6 +275,19 @@ function buildTemplate(piece) {
         points.push(x, y, z);
       }
     }
+    // 棋子是实心回转体，把碎片顶点连到中轴线上，
+    // 凸包就会得到"从表面切到轴心"的楔形块，看起来有真实的体积
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const t of bucket) {
+      for (let j = 0; j < 3; j++) {
+        minY = Math.min(minY, t.v[j * 3 + 1]);
+        maxY = Math.max(maxY, t.v[j * 3 + 1]);
+      }
+    }
+    const midY = (minY + maxY) / 2;
+    points.push(0, minY, 0, 0, midY, 0, 0, maxY, 0);
+
     const count = points.length / 3;
     if (count < 4) continue;
 
@@ -272,10 +313,8 @@ function buildTemplate(piece) {
     geo.computeBoundingSphere();
 
     const out = centroid.clone();
-    out.y *= 0.35;
-    if (out.lengthSq() < 1e-6) {
-      out.set(Math.random() - 0.5, 0.3, Math.random() - 0.5);
-    }
+    out.y *= 0.3;
+    if (out.lengthSq() < 1e-6) out.set(Math.random() - 0.5, 0.3, Math.random() - 0.5);
     out.normalize();
 
     shards.push({
@@ -287,7 +326,7 @@ function buildTemplate(piece) {
     });
   }
 
-  return { shards };
+  return { shards, height: maxY || 0.8 };
 }
 
 const templates = new Map();
@@ -298,7 +337,6 @@ function templateKey(piece) {
   return type && color ? `${color}${type}` : null;
 }
 
-/** 取（或首次生成）某类棋子的碎裂模板 */
 function getTemplate(piece) {
   const key = templateKey(piece);
   if (!key) return buildTemplate(piece);
@@ -310,10 +348,7 @@ function getTemplate(piece) {
   return template;
 }
 
-/**
- * 开局空闲时预热模板，避免第一次吃子时才计算。
- * 每一步只处理一个模板，不阻塞交互。
- */
+/** 开局空闲时逐个预热模板，避免第一次吃子才计算 */
 export function warmShatterTemplates() {
   const jobs = [];
   for (const color of ['w', 'b']) {
@@ -322,7 +357,7 @@ export function warmShatterTemplates() {
   const idle =
     typeof requestIdleCallback === 'function'
       ? requestIdleCallback
-      : (fn) => setTimeout(fn, 80);
+      : (fn) => setTimeout(fn, 90);
 
   let index = 0;
   const step = () => {
@@ -355,7 +390,7 @@ function cloneShardMaterial(base) {
   mat.depthWrite = true;
   mat.side = THREE.FrontSide;
   if (mat.emissive) {
-    mat.emissive = new THREE.Color(0xffcf94);
+    mat.emissive = new THREE.Color(0xfff0d0);
     mat.emissiveIntensity = 0;
   }
   return mat;
@@ -363,15 +398,15 @@ function cloneShardMaterial(base) {
 
 /**
  * @param {object} opts
- * @param {THREE.Group} opts.piece       被吃的棋子（已摆好）
+ * @param {THREE.Group} opts.piece       被吃的棋子
  * @param {THREE.Object3D} opts.parent   特效挂载的父节点
  * @param {import('./animate.js').Animator} opts.animator
- * @param {number} [opts.delay]          命中前等待的毫秒数（等进攻方落子）
- * @param {boolean} [opts.lowPower]      低配模式：碎片更少、火花更少
- * @param {boolean} [opts.reducedMotion] 系统要求减弱动效时退化为下沉淡出
- * @param {THREE.Vector3|null} [opts.from] 进攻方起点（世界坐标），决定炸开方向
- * @param {Function} [opts.onImpact]     命中瞬间回调（镜头震动）
- * @param {Function} [opts.onDone]       特效结束回调
+ * @param {number} [opts.delay]          命中前等待的毫秒数
+ * @param {boolean} [opts.lowPower]      低配模式
+ * @param {boolean} [opts.reducedMotion] 减弱动效
+ * @param {THREE.Vector3|null} [opts.from] 进攻方起点（世界坐标）
+ * @param {Function} [opts.onImpact]     命中瞬间回调
+ * @param {Function} [opts.onDone]       结束回调
  * @returns {{kill: Function}}
  */
 export function shatterPiece({
@@ -400,10 +435,10 @@ export function shatterPiece({
   const ownedMat = [];
   let sparkMat = null;
   let sparkGeo = null;
-  let flash = null;
+  let core = null;
+  let ring = null;
   let dust = null;
   let age = 0;
-  let shock = 0;
   let shakeFired = false;
 
   const dispose = () => {
@@ -411,9 +446,10 @@ export function shatterPiece({
     disposed = true;
     parent.remove(anchor);
     for (const mat of ownedMat) mat.dispose();
-    if (flash) {
-      flash.geometry.dispose();
-      flash.material.dispose();
+    for (const sprite of [core, ring]) {
+      if (!sprite) continue;
+      sprite.geometry.dispose();
+      sprite.material.dispose();
     }
     if (dust) {
       dust.geometry.dispose();
@@ -424,10 +460,11 @@ export function shatterPiece({
     if (onDone) onDone();
   };
 
-  /* ---------------- 命中瞬间才真正生成碎片 ---------------- */
   function build() {
     const template = getTemplate(piece);
-    const limit = lowPower ? Math.min(9, template.shards.length) : template.shards.length;
+    const limit = lowPower
+      ? Math.min(12, template.shards.length)
+      : template.shards.length;
 
     // 进攻方向（棋子本地坐标）
     const pushDir = new THREE.Vector3(0, 0, 1);
@@ -439,70 +476,93 @@ export function shatterPiece({
       pushDir.normalize();
     }
 
+    const heightScale = Math.max(0.6, template.height / 0.9);
+
     for (let i = 0; i < limit; i++) {
-      const template_shard = template.shards[i];
-      const mat = cloneShardMaterial(template_shard.material);
+      const tpl = template.shards[i];
+      const mat = cloneShardMaterial(tpl.material);
       ownedMat.push(mat);
 
-      const mesh = new THREE.Mesh(template_shard.geo, mat);
-      mesh.position.copy(template_shard.centroid);
-      mesh.castShadow = false;
+      const mesh = new THREE.Mesh(tpl.geo, mat);
+      mesh.position.copy(tpl.centroid);
+      // 碎片落地阴影让它们看起来"有重量"，低配模式关闭以省一次阴影绘制
+      mesh.castShadow = !lowPower;
       mesh.receiveShadow = false;
       anchor.add(mesh);
 
-      const out = template_shard.out;
-      const speed = (lowPower ? 1.4 : 1.7) + Math.random() * 1.7;
-      const push = 1.0 + Math.random() * 1.3;
-      const height = template_shard.centroid.y;
+      // 定格结束后的爆发速度：离撞击点越远飞得越快
+      const out = tpl.out;
+      const speed = ((lowPower ? 1.5 : 1.9) + Math.random() * 1.9) * heightScale;
+      const push = (0.8 + Math.random() * 1.3) * heightScale;
       shards.push({
         mesh,
         material: mat,
+        origin: tpl.centroid.clone(),
         v: new THREE.Vector3(
           out.x * speed + pushDir.x * push,
-          Math.max(1.3, (height / 0.95) * 1.9) + Math.random() * 1.8,
+          Math.max(1.1, (tpl.centroid.y / 0.9) * 1.6) + Math.random() * 1.6,
           out.z * speed + pushDir.z * push
         ),
         spin: new THREE.Vector3(
-          (Math.random() - 0.5) * 14,
-          (Math.random() - 0.5) * 14,
-          (Math.random() - 0.5) * 14
+          (Math.random() - 0.5) * 26,
+          (Math.random() - 0.5) * 26,
+          (Math.random() - 0.5) * 26
         ),
-        floor: FLOOR_Y + Math.max(0.01, template_shard.radius * 0.55),
+        floor: FLOOR_Y + Math.max(0.008, tpl.radius * 0.5),
         bounces: 0,
         rest: false,
       });
     }
 
-    // 命中闪光
-    const flashTex = getFlashTexture();
-    if (flashTex) {
-      flash = new THREE.Sprite(
+    // 撞击核心（小、亮、极短）
+    const coreTex = getCoreTexture();
+    if (coreTex) {
+      core = new THREE.Sprite(
         new THREE.SpriteMaterial({
-          map: flashTex,
-          color: 0xffd7a0,
+          map: coreTex,
+          color: 0xfff2d6,
           transparent: true,
-          opacity: 0.9,
+          opacity: 0.95,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
           toneMapped: false,
         })
       );
-      flash.center.set(0.5, 0.35);
-      flash.position.set(0, 0.28, 0);
-      flash.scale.setScalar(0.4);
-      anchor.add(flash);
+      core.center.set(0.5, 0.4);
+      core.position.set(pushDir.x * 0.08, 0.42, pushDir.z * 0.08);
+      core.scale.setScalar(0.3);
+      anchor.add(core);
     }
 
-    // 贴地尘埃
+    // 冲击波圆环
+    const ringTex = getRingTexture();
+    if (ringTex) {
+      ring = new THREE.Sprite(
+        new THREE.SpriteMaterial({
+          map: ringTex,
+          color: 0xffe4b8,
+          transparent: true,
+          opacity: 0.6,
+          depthWrite: false,
+          blending: THREE.AdditiveBlending,
+          toneMapped: false,
+        })
+      );
+      ring.position.set(0, 0.4, 0);
+      ring.scale.setScalar(0.35);
+      anchor.add(ring);
+    }
+
+    // 贴地尘埃（克制）
     const dustTex = getDustTexture();
     if (dustTex) {
       dust = new THREE.Mesh(
         new THREE.PlaneGeometry(1, 1),
         new THREE.MeshBasicMaterial({
           map: dustTex,
-          color: 0xd9c8a8,
+          color: 0xc9b795,
           transparent: true,
-          opacity: 0.34,
+          opacity: 0.2,
           depthWrite: false,
           blending: THREE.AdditiveBlending,
           toneMapped: false,
@@ -510,12 +570,13 @@ export function shatterPiece({
       );
       dust.rotation.x = -Math.PI / 2;
       dust.position.y = BOARD_TOP + 0.004;
-      dust.scale.setScalar(0.55);
+      dust.scale.setScalar(0.5);
       anchor.add(dust);
     }
 
-    // 金色火花
-    sparkGeo = new THREE.OctahedronGeometry(0.045, 0);
+    // 细长的金色火星
+    sparkGeo = new THREE.OctahedronGeometry(0.032, 0);
+    sparkGeo.scale(0.45, 1, 0.45);
     sparkMat = new THREE.MeshBasicMaterial({
       color: 0xffd489,
       transparent: true,
@@ -524,107 +585,123 @@ export function shatterPiece({
       blending: THREE.AdditiveBlending,
       toneMapped: false,
     });
-    const sparkCount = lowPower ? 6 : 11;
+    const sparkCount = lowPower ? 5 : 9;
     for (let i = 0; i < sparkCount; i++) {
       const mesh = new THREE.Mesh(sparkGeo, sparkMat);
       mesh.position.set(
-        (Math.random() - 0.5) * 0.24,
-        0.18 + Math.random() * 0.5,
-        (Math.random() - 0.5) * 0.24
+        (Math.random() - 0.5) * 0.2,
+        0.2 + Math.random() * 0.45,
+        (Math.random() - 0.5) * 0.2
       );
       anchor.add(mesh);
       const a = Math.random() * Math.PI * 2;
-      const sp = 1.6 + Math.random() * 3.2;
+      const sp = 2.4 + Math.random() * 3.6;
       sparks.push({
         mesh,
         v: new THREE.Vector3(
-          Math.cos(a) * sp + pushDir.x * 1.2,
-          1.4 + Math.random() * 3.4,
-          Math.sin(a) * sp + pushDir.z * 1.2
+          Math.cos(a) * sp + pushDir.x * 1.6,
+          1.8 + Math.random() * 3.6,
+          Math.sin(a) * sp + pushDir.z * 1.6
         ),
       });
     }
 
     anchor.visible = true;
     piece.visible = false;
-    shock = 0.075;
 
     if (onImpact && !shakeFired) {
       shakeFired = true;
-      onImpact();
+      onImpact(pushDir);
     }
   }
 
   function step(dt) {
     age += dt;
+    const holding = age < HOLD;
 
-    // 挤压回弹：碎片整体先被压扁再弹开
-    if (shock > 0) {
-      shock = Math.max(0, shock - dt);
-      const k = shock / 0.075;
-      anchor.scale.set(1.16 - 0.16 * k, 0.82 + 0.18 * k, 1.16 - 0.16 * k);
-    } else if (anchor.scale.x !== 1 || anchor.scale.y !== 1) {
-      anchor.scale.set(1, 1, 1);
-    }
-
-    for (const s of shards) {
-      if (!s.rest) {
+    // 定格：碎片保持在原位、整体发亮，微微内缩，像被击中的一瞬被冻住
+    if (holding) {
+      const k = age / HOLD;
+      for (const s of shards) {
+        s.mesh.position.copy(s.origin).multiplyScalar(1 - 0.05 * k);
+      }
+    } else {
+      for (const s of shards) {
+        if (s.rest) {
+          s.mesh.rotation.x += s.spin.x * dt;
+          s.mesh.rotation.y += s.spin.y * dt;
+          s.mesh.rotation.z += s.spin.z * dt;
+          s.spin.multiplyScalar(Math.max(0, 1 - 6 * dt));
+          continue;
+        }
         s.v.y += GRAVITY * dt;
         s.mesh.position.addScaledVector(s.v, dt);
+        s.mesh.rotation.x += s.spin.x * dt;
+        s.mesh.rotation.y += s.spin.y * dt;
+        s.mesh.rotation.z += s.spin.z * dt;
         if (s.mesh.position.y < s.floor) {
           s.mesh.position.y = s.floor;
-          if (s.bounces < 1 && s.v.y < -0.6) {
+          if (s.bounces < 1 && s.v.y < -1.2) {
             s.bounces++;
-            s.v.y = -s.v.y * 0.34;
-            s.v.x *= 0.55;
-            s.v.z *= 0.55;
-            s.spin.multiplyScalar(0.5);
+            s.v.y = -s.v.y * 0.32;
+            s.v.x *= 0.6;
+            s.v.z *= 0.6;
+            s.spin.multiplyScalar(0.55);
           } else {
             s.rest = true;
             s.v.set(0, 0, 0);
-            s.spin.multiplyScalar(0.2);
           }
         }
       }
-      s.mesh.rotation.x += s.spin.x * dt;
-      s.mesh.rotation.y += s.spin.y * dt;
-      s.mesh.rotation.z += s.spin.z * dt;
-      s.spin.multiplyScalar(Math.max(0, 1 - 4.5 * dt));
     }
 
-    // 闪光：极快地炸开后消失
-    if (flash) {
+    // 碎片发光：定格瞬间最亮，随后迅速消退
+    const glow = holding ? 0.34 : Math.max(0, 1 - (age - HOLD) / 0.09) * 0.3;
+    for (const s of shards) {
+      if (s.material.emissive) s.material.emissiveIntensity = glow;
+    }
+
+    // 核心闪光
+    if (core) {
+      const k = Math.min(1, age / 0.1);
+      core.scale.setScalar(0.3 + k * 0.65);
+      core.material.opacity = 0.95 * (1 - k) * (1 - k);
+    }
+
+    // 冲击波
+    if (ring) {
       const k = Math.min(1, age / 0.18);
-      flash.scale.setScalar(0.45 + k * 2.1);
-      flash.material.opacity = 0.9 * (1 - k) * (1 - k);
+      ring.scale.setScalar(0.3 + k * 1.05);
+      ring.material.opacity = 0.6 * Math.pow(1 - k, 1.8);
     }
 
-    // 尘埃扩散
+    // 尘埃
     if (dust) {
-      const k = Math.min(1, age / 0.36);
-      dust.scale.setScalar(0.55 + k * 1.35);
-      dust.material.opacity = 0.34 * (1 - k) * (1 - k);
+      const k = Math.min(1, age / 0.26);
+      dust.scale.setScalar(0.5 + k * 0.75);
+      dust.material.opacity = 0.2 * (1 - k) * (1 - k);
     }
 
-    // 火花
+    // 火星
     if (sparkMat) {
-      const fade = Math.max(0, 1 - age / 0.5);
-      sparkMat.opacity = fade;
+      sparkMat.opacity = Math.max(0, 1 - age / 0.42);
       for (const s of sparks) {
-        s.v.y += GRAVITY * 0.75 * dt;
+        if (age < HOLD) continue;
+        s.v.y += GRAVITY * 0.8 * dt;
         s.mesh.position.addScaledVector(s.v, dt);
-        s.mesh.rotation.x += dt * 9;
-        s.mesh.rotation.z += dt * 7;
+        s.mesh.rotation.x += dt * 12;
+        s.mesh.rotation.z += dt * 9;
       }
     }
 
-    // 碎片高光闪烁 + 后段淡出
-    const glow = Math.max(0, 1 - age / 0.15);
-    const fade = age < 0.34 ? 1 : Math.max(0, 1 - (age - 0.34) / 0.2);
-    for (const s of shards) {
-      const mat = s.material;
-      if (mat.emissive) mat.emissiveIntensity = glow * 0.55;
-      mat.opacity = fade;
+    // 收尾：缩小 + 淡出，避免"幽灵碎片"停在棋盘上
+    if (age > SETTLE_START) {
+      const k = Math.min(1, (age - SETTLE_START) / (DURATION / 1000 - SETTLE_START));
+      const shrink = 1 - k * 0.85;
+      for (const s of shards) {
+        s.mesh.scale.setScalar(shrink);
+        s.material.opacity = 1 - k * k;
+      }
     }
   }
 

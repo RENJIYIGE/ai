@@ -418,7 +418,7 @@ export class Game {
       const capturedMesh = this.pieceMeshes.get(capturedSq);
       if (capturedMesh) {
         // 命中瞬间：被吃的棋子粉碎（不阻塞棋局状态推进）
-        this.spawnShatter(capturedMesh, impactDelay(type), from);
+        this.spawnShatter(capturedMesh, impactDelay(type), from, to);
 
         // 进攻方落子时的下压回弹，强化撞击感
         promises.push(
@@ -463,7 +463,16 @@ export class Game {
     return Promise.all(promises);
   }
 
-  spawnShatter(piece, delay, fromPoint) {
+  spawnShatter(piece, delay, fromPoint, toPoint) {
+    // 撞击方向（世界坐标，水平分量）：镜头冲撞与碎片抛射都朝这个方向
+    const dir = new THREE.Vector3(
+      toPoint.x - fromPoint.x,
+      0,
+      toPoint.z - fromPoint.z
+    );
+    if (dir.lengthSq() < 1e-6) dir.set(0, 0, 1);
+    dir.normalize();
+
     let effect = null;
     effect = shatterPiece({
       piece,
@@ -473,7 +482,10 @@ export class Game {
       lowPower: this.scene.lowPower,
       reducedMotion: this.prefersReducedMotion(),
       from: fromPoint,
-      onImpact: () => this.scene.shakeCamera(0.17, 250),
+      onImpact: () => {
+        this.scene.impact(dir, 0.3, 220);
+        this.ui.flashImpact(1);
+      },
       onDone: () => this.shatters.delete(effect),
     });
     this.shatters.add(effect);

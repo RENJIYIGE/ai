@@ -170,27 +170,44 @@ export function createScene(canvas) {
 
   const animator = new Animator();
 
-  /* --------------------------- 镜头震动 --------------------------- */
-  // 只影响渲染用的相机位置，渲染后立刻还原，避免干扰 OrbitControls
-  const shake = { amp: 0, duration: 0, elapsed: 0 };
-  const shakeBase = new THREE.Vector3();
+  /* --------------------------- 打击感：镜头冲撞 --------------------------- */
+  // 不吃子时不做任何随机抖动，只在命中瞬间沿撞击方向"顶"一下镜头并轻推 FOV，
+  // 冲撞只作用于渲染这一帧，之后立刻还原，不会干扰 OrbitControls 的阻尼。
+  const kick = {
+    dir: new THREE.Vector3(0, 0, 1),
+    amp: 0,
+    duration: 0,
+    elapsed: 0,
+    baseFov: 38,
+  };
+  const kickBase = new THREE.Vector3();
 
-  function shakeCamera(amplitude = 0.16, duration = 240) {
-    if (lowPower) amplitude *= 0.55;
-    shake.amp = Math.max(shake.amp * (1 - shake.elapsed / Math.max(1, shake.duration)), amplitude);
-    shake.duration = duration;
-    shake.elapsed = 0;
+  /**
+   * @param {THREE.Vector3} dir 撞击方向（世界坐标，水平投影即可）
+   * @param {number} amplitude 相机位移幅度（世界单位）
+   * @param {number} duration 衰减时长（毫秒）
+   */
+  function impact(dir, amplitude = 0.28, duration = 220) {
+    if (lowPower) amplitude *= 0.6;
+    kick.dir.copy(dir);
+    kick.dir.y *= 0.3;
+    if (kick.dir.lengthSq() < 1e-6) kick.dir.set(0, 0, 1);
+    kick.dir.normalize();
+    kick.amp = amplitude;
+    kick.duration = Math.max(40, duration);
+    kick.elapsed = 0;
+    kick.baseFov = camera.fov;
   }
 
-  function applyShake(dt) {
-    if (shake.elapsed >= shake.duration) return false;
-    shake.elapsed += dt;
-    const k = Math.max(0, 1 - shake.elapsed / shake.duration);
-    const a = shake.amp * k * k;
-    const t = shake.elapsed * 0.001;
-    camera.position.x += Math.sin(t * 137) * a;
-    camera.position.y += Math.sin(t * 191 + 1.7) * a * 0.7;
-    camera.position.z += Math.sin(t * 163 + 3.1) * a * 0.5;
+  function applyKick(dt) {
+    if (kick.amp <= 0 || kick.elapsed >= kick.duration) return false;
+    kick.elapsed += dt;
+    const k = Math.max(0, 1 - kick.elapsed / kick.duration);
+    const e = k * k;
+    camera.position.addScaledVector(kick.dir, kick.amp * e);
+    camera.position.y += kick.amp * 0.3 * e;
+    camera.fov = kick.baseFov + 2.1 * e;
+    camera.updateProjectionMatrix();
     return true;
   }
 
@@ -261,10 +278,14 @@ export function createScene(canvas) {
     animator.update(dt);
     controls.update();
     if (onFrame) onFrame(dt / 1000, now / 1000);
-    shakeBase.copy(camera.position);
-    const shaking = applyShake(dt);
+    kickBase.copy(camera.position);
+    const kicked = applyKick(dt);
     renderer.render(scene, camera);
-    if (shaking) camera.position.copy(shakeBase);
+    if (kicked) {
+      camera.position.copy(kickBase);
+      camera.fov = kick.baseFov;
+      camera.updateProjectionMatrix();
+    }
   }
 
   function start(renderCallback) {
@@ -295,7 +316,7 @@ export function createScene(canvas) {
     controls,
     animator,
     lowPower,
-    shakeCamera,
+    impact,
     resize,
     flyTo,
     flyToView,
