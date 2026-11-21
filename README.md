@@ -32,6 +32,20 @@ npm run preview  # 预览构建产物
 
 浏览器需支持 **WebGL 2**（现代 Chrome / Edge / Firefox / Safari 均可）。
 
+## 部署到 GitHub Pages
+
+仓库已内置 `.github/workflows/deploy-pages.yml`：推送到 `main`（或当前开发分支）时会自动构建并发布静态站点。
+
+首次发布需要先在仓库中开启 Pages：
+
+1. 打开仓库 **Settings → Pages**
+2. 在 **Build and deployment** 中把 **Source** 设为 **GitHub Actions**
+3. 打开 **Actions** 页面，重新运行最新的 `Deploy to GitHub Pages` 工作流（或再推送一次提交）
+
+发布地址：<https://renjiyige.github.io/ai/>
+
+> 构建时默认基路径为 `/ai/`（与仓库名对应）。若仓库改名或绑定自定义域名，可在构建时设置 `BASE_PATH`，例如 `BASE_PATH=/ npm run build`。
+
 ## 操作说明
 
 | 操作 | 说明 |
