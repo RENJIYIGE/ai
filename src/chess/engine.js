@@ -172,6 +172,103 @@ export function isSquareAttacked(board, sq, byColor) {
   return false;
 }
 
+/**
+ * 找出所有"攻击 sq"的棋子所在格（迷雾模式里用于暴露将军子）。
+ */
+export function attackersOf(state, sq, byColor) {
+  const { board } = state;
+  const found = [];
+  const row = rowOf(sq);
+  const file = fileOf(sq);
+
+  // 兵
+  const pawnRow = byColor === 'w' ? row + 1 : row - 1;
+  if (pawnRow >= 0 && pawnRow < 8) {
+    const pawn = byColor === 'w' ? 'P' : 'p';
+    if (file > 0 && board[pawnRow * 8 + file - 1] === pawn) found.push(pawnRow * 8 + file - 1);
+    if (file < 7 && board[pawnRow * 8 + file + 1] === pawn) found.push(pawnRow * 8 + file + 1);
+  }
+
+  // 马
+  const knight = byColor === 'w' ? 'N' : 'n';
+  for (const [dr, dc] of KNIGHT_DELTAS) {
+    const r = row + dr;
+    const c = file + dc;
+    if (r < 0 || r > 7 || c < 0 || c > 7) continue;
+    if (board[r * 8 + c] === knight) found.push(r * 8 + c);
+  }
+
+  // 王
+  const king = byColor === 'w' ? 'K' : 'k';
+  for (const [dr, dc] of KING_DIRS) {
+    const r = row + dr;
+    const c = file + dc;
+    if (r < 0 || r > 7 || c < 0 || c > 7) continue;
+    if (board[r * 8 + c] === king) found.push(r * 8 + c);
+  }
+
+  // 斜线：象 / 后
+  const bishop = byColor === 'w' ? 'B' : 'b';
+  const queen = byColor === 'w' ? 'Q' : 'q';
+  for (const [dr, dc] of BISHOP_DIRS) {
+    let r = row + dr;
+    let c = file + dc;
+    while (r >= 0 && r < 8 && c >= 0 && c < 8) {
+      const p = board[r * 8 + c];
+      if (p) {
+        if (p === bishop || p === queen) found.push(r * 8 + c);
+        break;
+      }
+      r += dr;
+      c += dc;
+    }
+  }
+
+  // 直线：车 / 后
+  const rook = byColor === 'w' ? 'R' : 'r';
+  for (const [dr, dc] of ROOK_DIRS) {
+    let r = row + dr;
+    let c = file + dc;
+    while (r >= 0 && r < 8 && c >= 0 && c < 8) {
+      const p = board[r * 8 + c];
+      if (p) {
+        if (p === rook || p === queen) found.push(r * 8 + c);
+        break;
+      }
+      r += dr;
+      c += dc;
+    }
+  }
+
+  return found;
+}
+
+/**
+ * 迷雾模式的视野：某方能看到的格子。
+ * - 己方棋子所在格永远可见
+ * - 己方任一枚棋子的移动范围内（含吃子格、滑行射线到被挡住的格子）可见
+ * - 己方被将军时，将军的棋子强制暴露
+ * @returns {Uint8Array} 长度 64，1 = 可见
+ */
+export function visibleSquares(state, color) {
+  const mask = new Uint8Array(64);
+  const { board } = state;
+
+  for (let sq = 0; sq < 64; sq++) {
+    const piece = board[sq];
+    if (piece && colorOf(piece) === color) mask[sq] = 1;
+  }
+
+  for (const move of generatePseudoMoves(state, color)) mask[move.to] = 1;
+
+  const king = findKing(board, color);
+  if (king >= 0 && isSquareAttacked(board, king, opponent(color))) {
+    for (const sq of attackersOf(state, king, opponent(color))) mask[sq] = 1;
+  }
+
+  return mask;
+}
+
 export function isInCheck(state, color = state.turn) {
   const king = findKing(state.board, color);
   if (king < 0) return false;

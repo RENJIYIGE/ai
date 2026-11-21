@@ -71,6 +71,9 @@ export class Game {
     const settings = loadSettings();
     this.mode = settings.mode === 'pvp' ? 'pvp' : 'ai';
     this.level = [1, 2, 3].includes(settings.level) ? settings.level : 2;
+    this.fog = settings.fog === true;
+    this.visibility = null; // 迷雾：当前视角能看到的格子
+    this.lastVisibility = null;
     this.sound = new Sound(settings.sound !== false);
     this.aiColor = 'b';
     this.view = 'white';
@@ -82,9 +85,11 @@ export class Game {
       onSoundToggle: () => this.toggleSound(),
       onModeChange: (mode) => this.setMode(mode),
       onLevelChange: (level) => this.setLevel(level),
+      onFogChange: (on) => this.setFog(on),
     });
     this.ui.setMode(this.mode);
     this.ui.setLevel(this.level);
+    this.ui.setFog(this.fog);
     this.ui.setSound(this.sound.enabled);
 
     this.state = E.createInitialState();
@@ -102,6 +107,7 @@ export class Game {
     this.aiTimer = null;
     this.aiStart = 0;
 
+    this.refreshVisibility();
     this.rebuildPieces({ intro: true });
     this.refreshHighlights();
     this.updateUI();
@@ -180,7 +186,7 @@ export class Game {
 
   start() {
     this.scene.start((dt, time) => {
-      this.board.update(time);
+      this.board.update(time, dt);
     });
     setTimeout(() => this.ui.hideLoading(), 350);
     requestAnimationFrame(() => this.scene.intro());
@@ -192,6 +198,38 @@ export class Game {
   /* ------------------------------------------------------------------ */
   /* 棋子网格                                                           */
   /* ------------------------------------------------------------------ */
+
+  /** 当前视角所属的一方：人机模式下永远是玩家（白方），双人模式跟随行棋方 */
+  get viewColor() {
+    if (this.mode === 'ai') return this.aiColor === 'w' ? 'b' : 'w';
+    return this.state.turn;
+  }
+
+  /** 重新计算迷雾视野并同步到棋盘 */
+  refreshVisibility() {
+    this.lastVisibility = this.visibility;
+    this.visibility = this.fog ? E.visibleSquares(this.state, this.viewColor) : null;
+    this.board.setFog(this.visibility);
+  }
+
+  /** 迷雾模式下，只把"看得见的部分"交给 AI，避免它作弊 */
+  buildFogState(color) {
+    if (!this.fog) return this.state;
+    const mask = E.visibleSquares(this.state, color);
+    const hidden = [];
+    for (let sq = 0; sq < 64; sq++) {
+      const piece = this.state.board[sq];
+      if (piece && E.colorOf(piece) !== color && !mask[sq]) hidden.push(sq);
+    }
+    if (!hidden.length) return this.state;
+    const view = E.cloneState(this.state);
+    for (const sq of hidden) view.board[sq] = null;
+    return view;
+  }
+
+  isHidden(sq) {
+    return !!this.visibility && this.visibility[sq] === 0;
+  }
 
   rebuildPieces({ intro = false } = {}) {
     for (const child of [...this.piecesGroup.children]) {
@@ -207,6 +245,8 @@ export class Game {
       if (!piece) continue;
       const type = E.typeOf(piece);
       const color = E.colorOf(piece);
+      // 迷雾中看不见的敌方棋子不渲染
+      if (this.visibility && color !== this.viewColor && !this.visibility[sq]) continue;
       const mesh = createPieceMesh(type, color);
       if (type === 'n') {
         // 骑士略向棋盘中心偏转，让侧面轮廓更容易辨认
@@ -229,19 +269,36 @@ export class Game {
           onUpdate: (t) => mesh.scale.setScalar(Math.max(0.001, t)),
           onComplete: () => mesh.scale.setScalar(1),
         });
+      } else if (this.visibility && this.lastVisibility && !this.lastVisibility[sq]) {
+        // 刚进入视野：从雾里"长"出来
+        mesh.scale.setScalar(0.001);
+        this.animator.add({
+          duration: 280,
+          easing: easeOutBack,
+          onUpdate: (t) => mesh.scale.setScalar(Math.max(0.001, t)),
+          onComplete: () => mesh.scale.setScalar(1),
+        });
       }
     }
   }
 
   refreshHighlights() {
-    const checkSquare =
+    let checkSquare =
       this.status && this.status.check && !this.status.over
         ? E.findKing(this.state.board, this.state.turn)
         : -1;
+    let moves = this.selectedMoves;
+    let lastMove = this.lastMove;
+    if (this.visibility) {
+      moves = moves.map((m) => (this.visibility[m.to] ? m : { ...m, captured: null }));
+      if (lastMove && !this.visibility[lastMove.to]) lastMove = null;
+    }
+    if (this.visibility && checkSquare >= 0 && !this.visibility[checkSquare]) checkSquare = -1;
+
     this.board.show({
       selected: this.selected,
-      moves: this.selectedMoves,
-      lastMove: this.lastMove,
+      moves,
+      lastMove,
       checkSquare,
     });
   }
@@ -367,6 +424,7 @@ export class Game {
     this.status = status;
     this.deselect(false);
     this.recomputeCaptured();
+    this.refreshVisibility();
     this.rebuildPieces();
     this.refreshHighlights();
     this.updateUI();
@@ -384,9 +442,8 @@ export class Game {
   }
 
   animateMove(move) {
+    // 迷雾模式下进攻方可能不在视野里（mesh 为空），此时仍然要播被吃棋子的特效
     const mesh = this.pieceMeshes.get(move.from);
-    if (!mesh) return Promise.resolve();
-
     const from = squareToWorld(move.from);
     const to = squareToWorld(move.to);
     const type = E.typeOf(move.piece);
@@ -394,25 +451,27 @@ export class Game {
     const isKnight = type === 'n';
     const duration = moveDuration(type);
     const arc = isKnight ? 0.95 : 0.1;
-    const startRot = mesh.rotation.x;
+    const startRot = mesh ? mesh.rotation.x : 0;
     const promises = [];
 
-    promises.push(
-      this.animator.add({
-        duration,
-        easing: isKnight ? easeInOutCubic : easeInOutCubic,
-        onUpdate: (t) => {
-          mesh.position.x = from.x + (to.x - from.x) * t;
-          mesh.position.z = from.z + (to.z - from.z) * t;
-          mesh.position.y = BOARD_TOP + Math.sin(Math.PI * t) * arc;
-          if (isKnight) mesh.rotation.x = startRot + Math.sin(Math.PI * t) * -0.18;
-        },
-        onComplete: () => {
-          mesh.position.set(to.x, BOARD_TOP, to.z);
-          mesh.rotation.x = startRot;
-        },
-      })
-    );
+    if (mesh) {
+      promises.push(
+        this.animator.add({
+          duration,
+          easing: isKnight ? easeInOutCubic : easeInOutCubic,
+          onUpdate: (t) => {
+            mesh.position.x = from.x + (to.x - from.x) * t;
+            mesh.position.z = from.z + (to.z - from.z) * t;
+            mesh.position.y = BOARD_TOP + Math.sin(Math.PI * t) * arc;
+            if (isKnight) mesh.rotation.x = startRot + Math.sin(Math.PI * t) * -0.18;
+          },
+          onComplete: () => {
+            mesh.position.set(to.x, BOARD_TOP, to.z);
+            mesh.rotation.x = startRot;
+          },
+        })
+      );
+    }
 
     // 被吃棋子
     let capturedSq = -1;
@@ -426,7 +485,7 @@ export class Game {
         this.spawnShatter(capturedMesh, impactDelay(type), from, to);
 
         // 进攻方落子时的下压回弹，强化撞击感
-        promises.push(
+        if (mesh) promises.push(
           this.animator.add({
             duration: 90,
             delay: Math.max(0, duration - 45),
@@ -595,7 +654,7 @@ export class Game {
       id,
       level: this.level,
       key: E.positionKey(this.state),
-      state: this.state,
+      state: this.buildFogState(this.aiColor),
     });
     this.updateUI();
   }
@@ -627,13 +686,20 @@ export class Game {
       this.updateUI();
       return;
     }
-    if (!data.move || data.key !== key) {
-      const legal = E.generateLegalMoves(this.state);
+    const legal = E.generateLegalMoves(this.state);
+    if (!legal.length) {
       this.busy = false;
-      if (legal.length && this.state.turn === this.aiColor) this.executeMove(legal[0]);
-      else this.updateUI();
+      this.updateUI();
       return;
     }
+    let move = null;
+    if (data.move && data.key === key) {
+      // 迷雾里算出的着法在真实局面下有可能不合法（被看不见的棋子挡住），
+      // 此时退回到同一枚棋子的其它合法走法
+      move = legal.find((m) => m.from === data.move.from && m.to === data.move.to) || null;
+      if (!move) move = legal.find((m) => m.from === data.move.from) || null;
+    }
+    if (!move) move = legal[0];
     const wait = Math.max(0, 380 - (performance.now() - this.aiStart));
     clearTimeout(this.aiTimer);
     this.aiTimer = setTimeout(() => {
@@ -642,7 +708,7 @@ export class Game {
         this.updateUI();
         return;
       }
-      this.executeMove(data.move);
+      this.executeMove(move);
     }, wait);
   }
 
@@ -680,6 +746,7 @@ export class Game {
       } else {
         sub = '双人对战';
       }
+      if (this.fog) sub += ' · 迷雾模式';
     }
 
     this.ui.setTurn({
@@ -689,10 +756,11 @@ export class Game {
       check: status.check && !status.over,
       thinking: this.thinking,
     });
-    this.ui.renderMoves(this.history.slice(1));
+    this.ui.renderMoves(this.history.slice(1), this.fog ? this.viewColor : null);
     this.ui.renderCaptured({ byWhite: this.capturedByWhite, byBlack: this.capturedByBlack });
     this.ui.setUndoEnabled(this.history.length > 1);
     this.ui.setMode(this.mode);
+    this.ui.setFog(this.fog);
   }
 
   handleGameOver() {
@@ -735,6 +803,7 @@ export class Game {
     this.lastMove = null;
     this.gameOver = false;
     this.status = E.getGameStatus(this.state, [E.positionKey(this.state)]);
+    this.refreshVisibility();
     this.rebuildPieces({ intro: true });
     this.refreshHighlights();
     this.updateUI();
@@ -767,6 +836,7 @@ export class Game {
     );
     this.deselect(false);
     this.recomputeCaptured();
+    this.refreshVisibility();
     this.rebuildPieces();
     this.refreshHighlights();
     this.updateUI();
@@ -776,12 +846,32 @@ export class Game {
     }
   }
 
+  setFog(on) {
+    const next = !!on;
+    if (this.fog === next) return;
+    this.fog = next;
+    saveSettings({ ...loadSettings(), fog: next });
+    this.ui.setFog(next);
+    this.cancelAI();
+    this.resetHitStop();
+    this.refreshVisibility();
+    this.rebuildPieces();
+    this.refreshHighlights();
+    this.updateUI();
+    if (this.mode === 'ai' && !this.gameOver && this.state.turn === this.aiColor) {
+      this.requestAI();
+    }
+  }
+
   setMode(mode) {
     if (this.mode === mode) return;
     this.cancelAI();
     this.mode = mode;
     this.ui.setMode(mode);
     saveSettings({ ...loadSettings(), mode });
+    this.refreshVisibility();
+    this.rebuildPieces();
+    this.refreshHighlights();
     this.updateUI();
     if (mode === 'ai' && !this.gameOver && this.state.turn === this.aiColor) {
       this.requestAI();

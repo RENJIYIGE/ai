@@ -100,6 +100,48 @@ function makeLabelTexture(text) {
   return tex;
 }
 
+/* ------------------------- 迷雾贴图 ------------------------- */
+
+/** 格子上的冷灰雾：中心浓、边缘柔，带一点随机絮状纹理 */
+function makeFogTexture(size = 256) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+
+  const grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, 'rgba(16, 20, 29, 0.94)');
+  grad.addColorStop(0.55, 'rgba(18, 23, 33, 0.92)');
+  grad.addColorStop(0.86, 'rgba(21, 27, 38, 0.86)');
+  grad.addColorStop(1, 'rgba(24, 30, 42, 0.72)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+
+  // 絮状纹理，避免大面积死黑
+  let rnd = 1337;
+  const rand = () => {
+    rnd = (rnd * 16807) % 2147483647;
+    return rnd / 2147483647;
+  };
+  for (let i = 0; i < 46; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const r = size * (0.05 + rand() * 0.16);
+    const light = rand() > 0.5;
+    const blob = ctx.createRadialGradient(x, y, 0, x, y, r);
+    blob.addColorStop(0, light ? 'rgba(96, 112, 140, 0.10)' : 'rgba(8, 10, 16, 0.12)');
+    blob.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = blob;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
 /* ------------------------- 棋盘 ------------------------- */
 
 export function squareToWorld(sq) {
@@ -225,6 +267,64 @@ export function createBoard() {
     addLabel(num, 4.29, i - 3.5, Math.PI / 2);
   }
 
+  /* 迷雾层（迷雾模式下遮住看不见的格子） */
+  const fogGroup = new THREE.Group();
+  fogGroup.name = 'fog';
+  fogGroup.visible = false;
+  group.add(fogGroup);
+
+  const fogTexture = makeFogTexture();
+  const fogGeo = new THREE.PlaneGeometry(1.03, 1.03);
+  const fogQuads = [];
+  for (let sq = 0; sq < 64; sq++) {
+    const mat = new THREE.MeshBasicMaterial({
+      map: fogTexture,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    const mesh = new THREE.Mesh(fogGeo, mat);
+    mesh.rotation.set(-Math.PI / 2, 0, Math.random() * Math.PI * 2);
+    const p = squareToWorld(sq);
+    mesh.position.set(p.x, BOARD_TOP + 0.0035, p.z);
+    mesh.renderOrder = 1;
+    mesh.visible = false;
+    mesh.userData.target = 0;
+    fogGroup.add(mesh);
+    fogQuads[sq] = mesh;
+  }
+
+  /**
+   * 设置迷雾：mask 为长度 64、1 = 可见；传 null 关闭迷雾（全部淡出）
+   */
+  function setFog(mask) {
+    if (mask) fogGroup.visible = true;
+    for (let sq = 0; sq < 64; sq++) {
+      const hidden = mask ? !mask[sq] : false;
+      fogQuads[sq].userData.target = hidden ? 1 : 0;
+      if (hidden) fogQuads[sq].visible = true;
+    }
+  }
+
+  function updateFog(dt) {
+    if (!fogGroup.visible) return;
+    let any = false;
+    for (const quad of fogQuads) {
+      const target = quad.userData.target;
+      const cur = quad.material.opacity;
+      if (Math.abs(cur - target) < 0.005) {
+        quad.material.opacity = target;
+        quad.visible = target > 0.005;
+      } else {
+        quad.material.opacity = cur + (target - cur) * Math.min(1, dt * 11);
+        quad.visible = true;
+      }
+      if (quad.visible) any = true;
+    }
+    if (!any) fogGroup.visible = false;
+  }
+
   /* 高亮层 */
   const highlightGroup = new THREE.Group();
   highlightGroup.name = 'highlights';
@@ -288,7 +388,8 @@ export function createBoard() {
     }
   }
 
-  function update(time) {
+  function update(time, dt = 1 / 60) {
+    updateFog(dt);
     if (pulseMesh) {
       pulseMesh.material.opacity = 0.5 + Math.sin(time * 5) * 0.35;
       const s = 1 + Math.sin(time * 5) * 0.06;
@@ -296,5 +397,5 @@ export function createBoard() {
     }
   }
 
-  return { group, squares, show, update, clear };
+  return { group, squares, show, update, clear, setFog };
 }

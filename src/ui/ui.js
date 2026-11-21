@@ -1,4 +1,4 @@
-import { PIECE_GLYPH } from '../chess/engine.js';
+import { PIECE_GLYPH, colorOf } from '../chess/engine.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -29,6 +29,7 @@ export class UI {
     this.gameoverIcon = $('gameover-icon');
     this.loadingEl = $('loading');
     this.flashEl = $('impact-flash');
+    this.fogNote = $('fog-note');
     this.canvasEl = $('scene');
 
     this.bind();
@@ -79,6 +80,14 @@ export class UI {
       this.setLevel(Number(btn.dataset.level));
       h.onLevelChange?.(Number(btn.dataset.level));
     });
+
+    $('fog-group').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-fog]');
+      if (!btn) return;
+      const on = btn.dataset.fog === '1';
+      this.setFog(on);
+      h.onFogChange?.(on);
+    });
   }
 
   /* ---------------------------- 状态 ---------------------------- */
@@ -108,6 +117,13 @@ export class UI {
     });
   }
 
+  setFog(on) {
+    document.querySelectorAll('#fog-group button').forEach((b) => {
+      b.classList.toggle('active', (b.dataset.fog === '1') === on);
+    });
+    if (this.fogNote) this.fogNote.hidden = !on;
+  }
+
   setSound(on) {
     this.soundBtn.textContent = on ? '🔊' : '🔇';
     this.soundBtn.title = on ? '关闭音效' : '开启音效';
@@ -126,7 +142,7 @@ export class UI {
 
   /* ---------------------------- 棋谱 ---------------------------- */
 
-  renderMoves(history) {
+  renderMoves(history, hideColor = null) {
     this.movesEl.innerHTML = '';
     if (!history.length) {
       const empty = document.createElement('div');
@@ -153,7 +169,10 @@ export class UI {
         mv.className = 'mv';
         const entry = history[idx];
         if (entry) {
-          mv.textContent = entry.text;
+          const hidden =
+            hideColor && entry.move && colorOf(entry.move.piece) !== hideColor;
+          mv.textContent = hidden ? '？' : entry.text;
+          if (hidden) mv.classList.add('hidden-move');
           if (idx === history.length - 1) mv.classList.add('last');
         } else {
           mv.classList.add('empty');
