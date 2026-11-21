@@ -28,8 +28,21 @@ export class UI {
     this.gameoverSub = $('gameover-sub');
     this.gameoverIcon = $('gameover-icon');
     this.loadingEl = $('loading');
+    this.flashEl = $('impact-flash');
 
     this.bind();
+  }
+
+  /** 撞击闪光：给吃子加一帧全屏爆闪，重播动画需要先移除类 */
+  flashImpact(power = 1) {
+    const el = this.flashEl;
+    if (!el) return;
+    el.classList.remove('on');
+    el.style.opacity = '';
+    // 强制回流，保证连续两次吃子也能重新播放
+    void el.offsetWidth;
+    el.style.filter = power > 1 ? 'brightness(1.15)' : '';
+    el.classList.add('on');
   }
 
   bind() {
