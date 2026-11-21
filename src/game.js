@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { createScene } from './scene/scene.js';
 import { createBoard, squareToWorld, worldToSquare, BOARD_TOP } from './scene/board.js';
 import { createPieceMesh } from './scene/pieces.js';
-import { easeInOutCubic, easeOutBack, easeOutCubic } from './scene/animate.js';
+import { easeInOutCubic, easeOutBack } from './scene/animate.js';
+import { shatterPiece, warmShatterTemplates } from './scene/shatter.js';
 import * as E from './chess/engine.js';
 import { UI } from './ui/ui.js';
 import { Sound } from './audio.js';
@@ -16,6 +17,16 @@ const REASON_TEXT = {
 };
 
 const STORAGE_KEY = 'chess3d.settings.v1';
+
+/** 走子动画时长（毫秒），吃子命中特效与之对齐 */
+function moveDuration(type) {
+  return type === 'n' ? 470 : 340;
+}
+
+/** 吃子命中时刻：略早于进攻方落子，让撞击与爆炸同时发生 */
+function impactDelay(type) {
+  return Math.max(140, moveDuration(type) - 40);
+}
 
 function loadSettings() {
   try {
@@ -44,6 +55,7 @@ export class Game {
     this.piecesGroup.name = 'pieces';
     this.scene.scene.add(this.piecesGroup);
     this.pieceMeshes = new Map();
+    this.shatters = new Set();
 
     this.animator = this.scene.animator;
     this.raycaster = new THREE.Raycaster();
@@ -167,6 +179,8 @@ export class Game {
     });
     setTimeout(() => this.ui.hideLoading(), 350);
     requestAnimationFrame(() => this.scene.intro());
+    // 开场动画之后在空闲时间预生成碎裂模板，第一次吃子也不掉帧
+    setTimeout(() => warmShatterTemplates(), 2400);
     if (this.mode === 'ai' && this.state.turn === this.aiColor) this.requestAI();
   }
 
@@ -373,7 +387,7 @@ export class Game {
     const type = E.typeOf(move.piece);
     const white = E.colorOf(move.piece) === 'w';
     const isKnight = type === 'n';
-    const duration = isKnight ? 470 : 340;
+    const duration = moveDuration(type);
     const arc = isKnight ? 0.95 : 0.1;
     const startRot = mesh.rotation.x;
     const promises = [];
@@ -403,19 +417,20 @@ export class Game {
     if (capturedSq >= 0) {
       const capturedMesh = this.pieceMeshes.get(capturedSq);
       if (capturedMesh) {
+        // 命中瞬间：被吃的棋子粉碎（不阻塞棋局状态推进）
+        this.spawnShatter(capturedMesh, impactDelay(type), from);
+
+        // 进攻方落子时的下压回弹，强化撞击感
         promises.push(
           this.animator.add({
-            duration: 300,
-            delay: 80,
-            easing: easeOutCubic,
+            duration: 90,
+            delay: Math.max(0, duration - 45),
+            easing: (t) => t,
             onUpdate: (t) => {
-              capturedMesh.scale.setScalar(Math.max(0.001, 1 - t));
-              capturedMesh.position.y = BOARD_TOP + t * 0.45;
-              capturedMesh.rotation.y += 0.02;
+              const k = Math.sin(Math.PI * t);
+              mesh.scale.set(1 + 0.12 * k, 1 - 0.14 * k, 1 + 0.12 * k);
             },
-            onComplete: () => {
-              capturedMesh.visible = false;
-            },
+            onComplete: () => mesh.scale.set(1, 1, 1),
           })
         );
       }
@@ -448,10 +463,44 @@ export class Game {
     return Promise.all(promises);
   }
 
+  spawnShatter(piece, delay, fromPoint) {
+    let effect = null;
+    effect = shatterPiece({
+      piece,
+      parent: this.scene.scene,
+      animator: this.animator,
+      delay,
+      lowPower: this.scene.lowPower,
+      reducedMotion: this.prefersReducedMotion(),
+      from: fromPoint,
+      onImpact: () => this.scene.shakeCamera(0.17, 250),
+      onDone: () => this.shatters.delete(effect),
+    });
+    this.shatters.add(effect);
+    return effect;
+  }
+
+  clearShatters() {
+    for (const effect of this.shatters) effect.kill();
+    this.shatters.clear();
+  }
+
+  prefersReducedMotion() {
+    return !!(
+      window.matchMedia &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    );
+  }
+
   playMoveSound(move, status) {
     if (move.castle) this.sound.castle();
-    else if (move.captured) this.sound.capture();
-    else this.sound.move();
+    else if (move.captured) {
+      // 先是一声划过的气声，命中瞬间再放重击
+      this.sound.slide();
+      setTimeout(() => {
+        if (this.sound.enabled) this.sound.impact(this.level === 1 ? 0.85 : 1);
+      }, impactDelay(E.typeOf(move.piece)));
+    } else this.sound.move();
     if (status.check) setTimeout(() => this.sound.check(), 130);
     if (move.promotion) setTimeout(() => this.sound.promote(), 240);
   }
@@ -618,6 +667,7 @@ export class Game {
 
   newGame() {
     this.cancelAI();
+    this.clearShatters();
     this.ui.hideGameOver();
     this.ui.hidePromotion();
     this.state = E.createInitialState();
@@ -641,6 +691,7 @@ export class Game {
   undo() {
     if (this.history.length <= 1) return;
     this.cancelAI();
+    this.clearShatters();
     this.ui.hideGameOver();
     const human = this.aiColor === 'w' ? 'b' : 'w';
     let plies = 1;
