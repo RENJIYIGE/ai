@@ -23,10 +23,15 @@ function moveDuration(type) {
   return type === 'n' ? 470 : 340;
 }
 
-/** 吃子命中时刻：略早于进攻方落子，让撞击与爆炸同时发生 */
+/** 吃子命中时刻：几乎就在进攻方落子的那一帧 */
 function impactDelay(type) {
-  return Math.max(140, moveDuration(type) - 40);
+  return Math.max(140, moveDuration(type) - 20);
 }
+
+/** 顿帧 + 慢镜：命中瞬间冻结整个场景，再短暂放慢，最后恢复 */
+const HIT_STOP_MS = 70;
+const HIT_SLOW_MS = 90;
+const HIT_SLOW_SCALE = 0.5;
 
 function loadSettings() {
   try {
@@ -483,13 +488,51 @@ export class Game {
       reducedMotion: this.prefersReducedMotion(),
       from: fromPoint,
       onImpact: () => {
-        this.scene.impact(dir, 0.3, 220);
-        this.ui.flashImpact(1);
+        if (this.prefersReducedMotion()) return;
+        this.hitStop();
+        this.scene.impact(dir, 0.58, 280);
+        this.ui.flashImpact(1.35);
+        // 碎片砸到棋盘时的余震，让冲击持续一小会儿
+        if (this.rumbleTimer) clearTimeout(this.rumbleTimer);
+        this.rumbleTimer = setTimeout(() => {
+          this.scene.impact(dir, 0.17, 150);
+          this.rumbleTimer = null;
+        }, 330);
       },
       onDone: () => this.shatters.delete(effect),
     });
     this.shatters.add(effect);
     return effect;
+  }
+
+  /** 顿帧 → 慢镜 → 恢复，夸张的打击感主要来自这里 */
+  hitStop() {
+    this.resetHitStop();
+    this.animator.timeScale = 0;
+    this.hitStopTimer = setTimeout(() => {
+      this.animator.timeScale = HIT_SLOW_SCALE;
+      this.hitSlowTimer = setTimeout(() => {
+        this.animator.timeScale = 1;
+        this.hitSlowTimer = null;
+      }, HIT_SLOW_MS);
+      this.hitStopTimer = null;
+    }, HIT_STOP_MS);
+  }
+
+  resetHitStop() {
+    if (this.hitStopTimer) {
+      clearTimeout(this.hitStopTimer);
+      this.hitStopTimer = null;
+    }
+    if (this.hitSlowTimer) {
+      clearTimeout(this.hitSlowTimer);
+      this.hitSlowTimer = null;
+    }
+    if (this.rumbleTimer) {
+      clearTimeout(this.rumbleTimer);
+      this.rumbleTimer = null;
+    }
+    this.animator.timeScale = 1;
   }
 
   clearShatters() {
@@ -679,6 +722,7 @@ export class Game {
 
   newGame() {
     this.cancelAI();
+    this.resetHitStop();
     this.clearShatters();
     this.ui.hideGameOver();
     this.ui.hidePromotion();
@@ -703,6 +747,7 @@ export class Game {
   undo() {
     if (this.history.length <= 1) return;
     this.cancelAI();
+    this.resetHitStop();
     this.clearShatters();
     this.ui.hideGameOver();
     const human = this.aiColor === 'w' ? 'b' : 'w';

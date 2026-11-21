@@ -29,20 +29,26 @@ export class UI {
     this.gameoverIcon = $('gameover-icon');
     this.loadingEl = $('loading');
     this.flashEl = $('impact-flash');
+    this.canvasEl = $('scene');
 
     this.bind();
   }
 
-  /** 撞击闪光：给吃子加一帧全屏爆闪，重播动画需要先移除类 */
+  /** 撞击闪光 + 画面轻微推近：重播动画需要先移除类并强制回流 */
   flashImpact(power = 1) {
     const el = this.flashEl;
     if (!el) return;
     el.classList.remove('on');
-    el.style.opacity = '';
-    // 强制回流，保证连续两次吃子也能重新播放
     void el.offsetWidth;
-    el.style.filter = power > 1 ? 'brightness(1.15)' : '';
+    el.style.setProperty('--flash-alpha', Math.min(0.72, 0.3 * power).toFixed(2));
     el.classList.add('on');
+
+    const canvas = this.canvasEl;
+    if (canvas) {
+      canvas.classList.remove('punch');
+      void canvas.offsetWidth;
+      canvas.classList.add('punch');
+    }
   }
 
   bind() {

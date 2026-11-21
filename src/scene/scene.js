@@ -206,7 +206,7 @@ export function createScene(canvas) {
     const e = k * k;
     camera.position.addScaledVector(kick.dir, kick.amp * e);
     camera.position.y += kick.amp * 0.3 * e;
-    camera.fov = kick.baseFov + 2.1 * e;
+    camera.fov = kick.baseFov + 3.3 * e;
     camera.updateProjectionMatrix();
     return true;
   }

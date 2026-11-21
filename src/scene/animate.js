@@ -14,6 +14,8 @@ export const easeInQuad = (t) => t * t;
 export class Animator {
   constructor() {
     this.items = [];
+    // 全局时间缩放：0 = 顿帧（所有补间冻结），0.45 = 慢镜
+    this.timeScale = 1;
   }
 
   add({ duration = 300, delay = 0, easing = easeOutCubic, onUpdate = () => {}, onComplete = null }) {
@@ -24,8 +26,9 @@ export class Animator {
 
   update(dt) {
     const done = [];
+    const step = dt * this.timeScale;
     for (const item of this.items) {
-      item.elapsed += dt;
+      item.elapsed += step;
       if (item.elapsed < item.delay) continue;
       const t = Math.min(1, (item.elapsed - item.delay) / Math.max(1, item.duration));
       item.onUpdate(item.easing(t), t);
