@@ -54,6 +54,13 @@
             <button data-level="2" class="active">中等</button>
             <button data-level="3">困难</button>
           </div>
+          <div class="segmented small fog-toggle" id="fog-group">
+            <button data-fog="0" class="active" title="所有棋子都可见">视野全开</button>
+            <button data-fog="1" title="只能看到己方棋子移动范围内的棋子">迷雾模式</button>
+          </div>
+          <p class="fog-note" id="fog-note" hidden>
+            迷雾：只能看见己方棋子移动范围内的棋子；被将军时，将军的棋子强制暴露。看不见的棋子不会渲染，远方动向要靠自己推断。
+          </p>
         </div>
 
         <div class="section grow">
