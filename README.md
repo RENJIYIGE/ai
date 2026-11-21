@@ -34,7 +34,7 @@ npm run preview  # 预览构建产物
 
 ## 部署到 GitHub Pages
 
-仓库已内置 `.github/workflows/deploy-pages.yml`：推送到 `main`（或当前开发分支）时会自动构建并发布静态站点。
+仓库已内置 `.github/workflows/deploy-pages.yml`：推送到 `main` 时会自动构建并发布静态站点。
 
 首次发布需要先在仓库中开启 Pages：
 
